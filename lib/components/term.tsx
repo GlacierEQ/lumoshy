@@ -17,7 +17,9 @@ import {WebLinksAddon} from 'xterm-addon-web-links';
 import {WebglAddon} from 'xterm-addon-webgl';
 
 import type {TermProps} from '../../typings/hyper';
+import {callTerminalAgentWithContext} from '../mastra-connector';
 import terms from '../terms';
+import {parseCommandForExecution} from '../utils/command-parser';
 import processClipboard from '../utils/paste';
 import {decorate} from '../utils/plugins';
 
@@ -35,6 +37,15 @@ const CURSOR_STYLES = {
   UNDERLINE: 'underline',
   BLOCK: 'block'
 } as const;
+
+// AI 模式相关常量
+// const AI_MODE_PREFIX = '\x1b[36m[AI]\x1b[0m '; // 青色的 [AI] 前缀，暂时不使用
+const AI_PROCESSING_MESSAGE = '\r\n\x1b[36m[AI 处理中...]\x1b[0m';
+const AI_MODE_ENABLED_MESSAGE = '\r\n\x1b[36m[AI模式已开启，请使用自然语言描述命令]\x1b[0m\r\n';
+const AI_MODE_DISABLED_MESSAGE = '\r\n\x1b[33m[AI模式已关闭]\x1b[0m\r\n';
+const AI_ERROR_MESSAGE = '\r\n\x1b[31m[AI错误]: ';
+const AI_PROMPT = '\r\n\x1b[36m请输入您想要执行的操作: \x1b[0m';
+const AI_MODE_SHORTCUT = 'Ctrl+Space 或 Alt+Space';
 
 const isWebgl2Supported = (() => {
   let isSupported = window.WebGL2RenderingContext ? undefined : false;
@@ -111,6 +122,16 @@ export default class Term extends React.PureComponent<
           resultCount: number;
         }
       | undefined;
+    cursorPosition?: {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+      col: number;
+      row: number;
+    };
+    aiMode: boolean;
+    isProcessingAI: boolean;
   }
 > {
   termRef: HTMLElement | null;
@@ -126,13 +147,18 @@ export default class Term extends React.PureComponent<
   resizeObserver!: ResizeObserver;
   resizeTimeout!: NodeJS.Timeout;
   searchDecorations: ISearchDecorationOptions;
+  aiThreadId: string; // 用于追踪 AI 对话
+  currentInputLine: string; // 当前输入行
   state = {
     searchOptions: {
       caseSensitive: false,
       wholeWord: false,
       regex: false
     },
-    searchResults: undefined
+    searchResults: undefined,
+    cursorPosition: undefined,
+    aiMode: false,
+    isProcessingAI: false
   };
 
   constructor(props: TermProps) {
@@ -153,6 +179,8 @@ export default class Term extends React.PureComponent<
       activeMatchBorder: Color(this.props.cursorColor).hex(),
       matchBorder: Color(this.props.cursorColor).hex()
     };
+    this.aiThreadId = `terminal-${Date.now()}`;
+    this.currentInputLine = '';
   }
 
   // The main process shows this in the About dialog
@@ -291,18 +319,30 @@ export default class Term extends React.PureComponent<
       props.onResize(this.term.cols, this.term.rows);
     }
 
-    if (props.onCursorMove) {
+    if (props.onCursorMove || true) {
       this.disposableListeners.push(
         this.term.onCursorMove(() => {
-          const cursorFrame = {
-            x: this.term.buffer.active.cursorX * (this.term as any)._core._renderService.dimensions.actualCellWidth,
-            y: this.term.buffer.active.cursorY * (this.term as any)._core._renderService.dimensions.actualCellHeight,
-            width: (this.term as any)._core._renderService.dimensions.actualCellWidth,
-            height: (this.term as any)._core._renderService.dimensions.actualCellHeight,
-            col: this.term.buffer.active.cursorX,
-            row: this.term.buffer.active.cursorY
-          };
-          props.onCursorMove?.(cursorFrame);
+          try {
+            const cursorFrame = {
+              x: this.term.buffer.active.cursorX * (this.term as any)._core._renderService.dimensions.actualCellWidth,
+              y: this.term.buffer.active.cursorY * (this.term as any)._core._renderService.dimensions.actualCellHeight,
+              width: (this.term as any)._core._renderService.dimensions.actualCellWidth,
+              height: (this.term as any)._core._renderService.dimensions.actualCellHeight,
+              col: this.term.buffer.active.cursorX,
+              row: this.term.buffer.active.cursorY
+            };
+            
+            // 更新光标位置状态，确保始终调用setState
+            this.setState({ cursorPosition: cursorFrame });
+            console.log('光标位置更新:', cursorFrame);
+            
+            // 如果有回调，也调用它
+            if (props.onCursorMove) {
+              props.onCursorMove(cursorFrame);
+            }
+          } catch (error) {
+            console.error('更新光标位置时出错:', error);
+          }
         })
       );
     }
@@ -321,6 +361,56 @@ export default class Term extends React.PureComponent<
     });
 
     terms[this.props.uid] = this;
+
+    // 在终端的键盘事件中添加 AI 模式切换和处理逻辑
+    this.term.onKey(async (e) => {
+      // 切换 AI 模式 (Ctrl+Space 或 Alt+Space)
+      if ((e.domEvent.ctrlKey || e.domEvent.altKey) && e.domEvent.code === 'Space') {
+        e.domEvent.preventDefault();
+        this.toggleAIMode();
+        return;
+      }
+
+      // 在 AI 模式下处理回车键
+      if (this.state.aiMode && e.domEvent.key === 'Enter' && !this.state.isProcessingAI) {
+        const currentLine = this.getCurrentInputLine();
+        if (currentLine.trim()) {
+          e.domEvent.preventDefault(); // 阻止默认回车行为
+          
+          // 写入一个新行，表示命令已提交
+          this.term.write('\r\n');
+          
+          // 处理 AI 命令
+          await this.processAICommand(currentLine);
+        }
+      }
+    });
+
+    // 监听数据输入，用于跟踪当前输入行
+    this.term.onData((data) => {
+      // 只在 AI 模式下追踪输入
+      if (this.state.aiMode) {
+        // 处理退格键
+        if (data === '\b' || data === '\x7f') {
+          if (this.currentInputLine.length > 0) {
+            // 删除一个字符
+            this.currentInputLine = this.currentInputLine.slice(0, -1);
+            // 视觉反馈：删除最后一个字符
+            this.term.write('\b \b');
+          }
+        } 
+        // 处理回车键（在onKey中单独处理）
+        else if (data === '\r') {
+          // 不做任何处理，由onKey处理
+        }
+        // 处理其他输入
+        else if (data.length === 1 && !data.match(/[\r\n]/)) {
+          this.currentInputLine += data;
+          // 直接回显字符
+          this.term.write(data);
+        }
+      }
+    });
   }
 
   getTermDocument() {
@@ -510,12 +600,125 @@ export default class Term extends React.PureComponent<
     });
   }
 
+  // 处理命令处理
+  handleCommand = (command: string) => {
+    if (command && this.term) {
+      this.term.write(command);
+      setTimeout(() => {
+        this.term.write('\n');
+      }, 100);
+    }
+  };
+
+  /**
+   * 切换 AI 模式
+   */
+  toggleAIMode = () => {
+    this.setState((prevState) => {
+      const newAIMode = !prevState.aiMode;
+      
+      // 更新状态
+      if (newAIMode) {
+        // 清空输入行
+        this.currentInputLine = '';
+        
+        // 显示欢迎消息
+        this.term.write(AI_MODE_ENABLED_MESSAGE);
+        
+        // 提示用户输入
+        this.term.write(AI_PROMPT);
+      } else {
+        this.term.write(AI_MODE_DISABLED_MESSAGE);
+      }
+      
+      return { aiMode: newAIMode };
+    });
+  };
+
+  /**
+   * 获取当前输入行的文本
+   */
+  getCurrentInputLine = (): string => {
+    // 使用我们追踪的输入行
+    return this.currentInputLine;
+  };
+
+  /**
+   * 处理 AI 命令生成
+   */
+  processAICommand = async (input: string) => {
+    if (!input.trim() || this.state.isProcessingAI) return;
+
+    this.setState({ isProcessingAI: true });
+    
+    // 清空当前输入行
+    this.currentInputLine = '';
+    
+    try {
+      // 显示处理中的消息
+      this.term.write(AI_PROCESSING_MESSAGE);
+      
+      // 调用终端智能体
+      const response = await callTerminalAgentWithContext(input, this.aiThreadId);
+      
+      // 解析生成的命令
+      const command = parseCommandForExecution(response);
+      
+      if (command) {
+        // 显示找到的命令，使用明显的格式
+        this.term.write(`\r\n\x1b[42m\x1b[30m 找到命令 \x1b[0m \x1b[32m${command}\x1b[0m`);
+        
+        // 询问是否执行
+        this.term.write('\r\n\x1b[33m是否执行此命令? (y/n): \x1b[0m');
+        
+        // 设置一次性监听器来处理用户确认
+        const confirmHandler = this.term.onData((data) => {
+          if (data.toLowerCase() === 'y') {
+            // 执行命令
+            this.term.write(`\r\n\x1b[32m执行命令: ${command}\x1b[0m\r\n`);
+            this.term.write(command);
+            this.term.write('\r\n');
+            
+            // 移除监听器
+            confirmHandler.dispose();
+          } else if (data.toLowerCase() === 'n') {
+            this.term.write('\r\n\x1b[33m命令已取消\x1b[0m\r\n');
+            
+            // 移除监听器
+            confirmHandler.dispose();
+            
+            // 重新提示用户输入
+            this.term.write(AI_PROMPT);
+          } else {
+            return; // 忽略其他输入
+          }
+        });
+      } else {
+        // 没有找到有效命令，显示完整的 AI 响应
+        this.term.write(`\r\n\x1b[33m[AI回答]:\r\n${response}\x1b[0m\r\n`);
+        
+        // 重新提示用户输入
+        this.term.write(AI_PROMPT);
+      }
+    } catch (error) {
+      // 显示错误信息
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.term.write(`${AI_ERROR_MESSAGE}${errorMessage}\x1b[0m\r\n`);
+      
+      // 重新提示用户输入
+      this.term.write(AI_PROMPT);
+    } finally {
+      this.setState({ isProcessingAI: false });
+    }
+  };
+
   render() {
     return (
       <div className={`term_fit ${this.props.isTermActive ? 'term_active' : ''}`} onMouseUp={this.onMouseUp}>
         {this.props.customChildrenBefore}
         <div ref={this.onTermWrapperRef} className="term_fit term_wrapper" />
         {this.props.customChildren}
+        
         {this.props.search ? (
           <SearchBox
             next={this.searchNext}
@@ -551,16 +754,145 @@ export default class Term extends React.PureComponent<
           />
         ) : null}
 
+        {/* 浮动AI工具栏 */}
+        <div className="ai-floating-toolbar">
+          {this.state.aiMode && (
+            <div className="ai-status-badge">
+              <span className="ai-badge-text">AI模式已启用</span>
+              {this.state.isProcessingAI && (
+                <div className="ai-loading-dots">
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                </div>
+              )}
+            </div>
+          )}
+          
+          <div className="ai-toolbar-buttons">
+            <button 
+              className={`ai-toggle-button ${this.state.aiMode ? 'active' : ''}`} 
+              onClick={this.toggleAIMode}
+              title={`${this.state.aiMode ? '关闭' : '打开'}AI模式 (${AI_MODE_SHORTCUT})`}
+            >
+              <span className="button-icon">🤖</span>
+              <span className="button-text">AI{this.state.aiMode ? ' 开启' : ''}</span>
+            </button>
+            
+            {this.state.aiMode && (
+              <>
+                <button className="ai-tool-button" title="解释 (Ctrl+1)">
+                  <span className="button-icon">📖</span>
+                  <span className="button-text">解释</span>
+                </button>
+                <button className="ai-tool-button" title="修复 (Ctrl+2)">
+                  <span className="button-icon">🔧</span>
+                  <span className="button-text">修复</span>
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+
         <style jsx global>{`
           .term_fit {
             display: block;
             width: 100%;
             height: 100%;
+            position: relative;
           }
 
           .term_wrapper {
-            /* TODO: decide whether to keep this or not based on understanding what xterm-selection is for */
             overflow: hidden;
+          }
+          
+          /* 浮动AI工具栏 */
+          .ai-floating-toolbar {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 10px;
+            z-index: 999;
+          }
+          
+          .ai-status-badge {
+            display: flex;
+            align-items: center;
+            background-color: rgba(65, 105, 225, 0.7);
+            color: white;
+            padding: 5px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-bottom: 5px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+          }
+          
+          .ai-badge-text {
+            margin-right: 5px;
+          }
+          
+          .ai-toolbar-buttons {
+            display: flex;
+            gap: 8px;
+          }
+          
+          .ai-toggle-button, .ai-tool-button {
+            display: flex;
+            align-items: center;
+            background-color: rgba(40, 40, 40, 0.75);
+            color: #ccc;
+            border: none;
+            border-radius: 4px;
+            padding: 5px 10px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s ease;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+          }
+          
+          .ai-toggle-button:hover, .ai-tool-button:hover {
+            background-color: rgba(60, 60, 60, 0.85);
+            color: white;
+          }
+          
+          .ai-toggle-button.active {
+            background-color: rgba(65, 105, 225, 0.75);
+            color: white;
+          }
+          
+          .button-icon {
+            margin-right: 5px;
+          }
+          
+          .ai-loading-dots {
+            display: flex;
+            gap: 3px;
+            margin-left: 5px;
+          }
+          
+          .ai-loading-dots span {
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background-color: white;
+            animation: dot-pulse 1.5s infinite;
+          }
+          
+          .ai-loading-dots span:nth-child(2) {
+            animation-delay: 0.2s;
+          }
+          
+          .ai-loading-dots span:nth-child(3) {
+            animation-delay: 0.4s;
+          }
+          
+          @keyframes dot-pulse {
+            0%, 100% { opacity: 0.4; transform: scale(0.8); }
+            50% { opacity: 1; transform: scale(1.1); }
           }
         `}</style>
       </div>

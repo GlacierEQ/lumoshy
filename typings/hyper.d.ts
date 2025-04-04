@@ -220,7 +220,6 @@ export type HeaderProps = {
   minimize: () => void;
   close: () => void;
   openNewTab: (profile: string) => void;
-  aiToolbar?: React.ReactNode;
 } & extensionProps;
 
 import type {HyperConnectedProps} from '../lib/containers/hyper';

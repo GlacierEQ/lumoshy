@@ -114,3 +114,34 @@ If you have issues in the `codesign` step when running `yarn run dist` on macOS,
 - [Sample Extension](https://github.com/vercel/hyperpower)
 - [Sample Theme](https://github.com/vercel/hyperyellow)
 - [Awesome Hyper](https://github.com/bnb/awesome-hyper)
+
+# Hyper AI Terminal
+
+Hyper AI 是一个基于 [Hyper](https://hyper.is/) 的智能终端，集成了 AI 辅助功能。
+
+## 新功能: 光标命令输入
+
+我们新增了一个类似 Warp 的光标命令输入功能，让你可以在光标位置使用 AI 辅助命令生成。
+
+### 使用方法
+
+1. **激活光标命令输入**: 
+   - 按下 `Ctrl+Space` 或 `Alt+Space` 快捷键
+   - 在光标位置上方的蓝色指示器上点击
+
+2. **模式切换**:
+   - 普通模式: 直接输入命令
+   - AI 模式: 点击 AI 按钮切换到 AI 辅助模式，可以用自然语言描述你想做什么
+
+3. **关闭命令输入**:
+   - 按下 `Esc` 键
+   - 点击输入框外部区域
+
+### 例子
+
+在 AI 模式下，你可以输入:
+- "查找最近修改的文件"
+- "创建一个新的 React 组件"
+- "找出占用空间最大的文件夹"
+
+AI 会帮你生成相应的命令并执行。
