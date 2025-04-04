@@ -7,6 +7,166 @@ export const mastraClient = new MastraClient({
 });
 
 /**
+ * Mastra终端类，用于与终端智能体交互
+ */
+export class MastraTerminal {
+  private client: MastraClient;
+  private agentId: string;
+
+  constructor(options: { baseUrl: string, agentId: string }) {
+    this.client = new MastraClient({ baseUrl: options.baseUrl });
+    this.agentId = options.agentId;
+  }
+
+  /**
+   * 连接到Mastra服务
+   * @returns 是否连接成功
+   */
+  async connect(): Promise<boolean> {
+    try {
+      // 检查健康状态
+      const response = await fetch(`${this.client.baseUrl}/api/health`, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json'
+        }
+      });
+      
+      return response.ok;
+    } catch (error) {
+      console.error('连接Mastra服务失败:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 处理自然语言命令
+   * @param options 处理选项
+   * @returns 处理结果
+   */
+  async processNaturalLanguage(options: { 
+    input: string; 
+    currentDir: string;
+  }): Promise<{ success: boolean; output: string; error?: string }> {
+    try {
+      const agent = this.client.getAgent(this.agentId);
+      const response = await agent.generate({
+        messages: [
+          {
+            role: 'user',
+            content: `
+当前目录: ${options.currentDir}
+用户请求: ${options.input}
+`
+          }
+        ]
+      });
+      
+      return {
+        success: true,
+        output: response.text
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        output: '',
+        error: error.message || '未知错误'
+      };
+    }
+  }
+
+  /**
+   * 流式处理自然语言命令
+   * @param options 处理选项
+   * @param onChunk 数据块回调
+   * @param onComplete 完成回调
+   */
+  async streamNaturalLanguage(
+    options: { input: string; currentDir: string },
+    onChunk: (chunk: string) => void,
+    onComplete: (result: { success: boolean; output: string; error?: string }) => void
+  ): Promise<void> {
+    try {
+      const agent = this.client.getAgent(this.agentId);
+      const response = await agent.stream({
+        messages: [
+          {
+            role: 'user',
+            content: `
+当前目录: ${options.currentDir}
+用户请求: ${options.input}
+`
+          }
+        ]
+      });
+      
+      let fullText = '';
+      
+      await response.processDataStream({
+        onTextPart: (text) => {
+          fullText += text;
+          onChunk(text);
+        }
+      });
+      
+      onComplete({
+        success: true,
+        output: fullText
+      });
+    } catch (error: any) {
+      onComplete({
+        success: false,
+        output: '',
+        error: error.message || '未知错误'
+      });
+    }
+  }
+
+  /**
+   * 检查文本是否为自然语言
+   * @param text 输入文本
+   * @returns 是否为自然语言
+   */
+  static isNaturalLanguage(text: string): boolean {
+    // 简化的启发式判断，实际应用中可能需要更复杂的逻辑
+    if (!text || text.trim().length === 0) {
+      return false;
+    }
+    
+    // 如果文本以常见命令开头，可能不是自然语言
+    const commonCommands = [
+      'ls', 'cd', 'mkdir', 'rm', 'cp', 'mv', 'cat', 'grep', 'find',
+      'git', 'npm', 'yarn', 'pnpm', 'node', 'python', 'java', 'go',
+      'docker', 'kubectl', 'ssh', 'curl', 'wget', 'sudo', 'apt',
+      'brew', 'yum', 'pip', 'vim', 'nano', 'echo', 'touch'
+    ];
+    
+    // 检查是否以常见命令开头
+    const firstWord = text.trim().split(' ')[0];
+    if (commonCommands.includes(firstWord)) {
+      return false;
+    }
+    
+    // 检查是否包含有意义的单词数量（至少3个单词视为自然语言）
+    const words = text.trim().split(/\s+/).filter(word => word.length > 1);
+    if (words.length >= 3) {
+      return true;
+    }
+    
+    // 检查是否以"如何"、"怎么"等疑问词开头
+    const questionPrefixes = ['how', 'what', 'why', 'when', 'where', 'who', 'which', 
+                             '如何', '怎么', '为什么', '什么', '谁', '何时', '哪里'];
+    for (const prefix of questionPrefixes) {
+      if (text.toLowerCase().startsWith(prefix)) {
+        return true;
+      }
+    }
+    
+    return false;
+  }
+}
+
+/**
  * 调用终端智能体，处理用户输入并生成响应
  * @param input 用户输入的文本
  * @param threadId 会话ID（可选）

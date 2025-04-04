@@ -15,6 +15,7 @@
     "test:e2e": "ava --config ava-e2e.config.js",
     "test:terminal-ai": "ts-node -r tsconfig-paths/register test/terminal-ai-test.ts",
     "test:terminal-ai:mock": "ts-node -r tsconfig-paths/register test/terminal-ai-test-mock.ts",
+    "test:context-awareness": "bash ./scripts/test-context-awareness.sh",
     "postinstall": "yarn run v8-snapshot && webpack --config-name hyper-app && electron-builder install-app-deps && yarn run rebuild-node-pty && cpy --cwd=target node_modules \"../../app/\" && husky install && yarn run generate-schema",
     "rebuild-node-pty": "electron-rebuild -f -o node-pty -m target",
     "dist": "yarn run build && electron-builder",

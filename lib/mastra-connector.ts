@@ -4,9 +4,20 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { MastraTerminal } from './mastra-integration';
+import { MastraClient } from '@mastra/client-js';
+import * as fs from 'fs';
+import * as path from 'path';
 
 // 将exec函数Promise化
 const execPromise = promisify(exec);
+const readFileAsync = promisify(fs.readFile);
+const readdirAsync = promisify(fs.readdir);
+const statAsync = promisify(fs.stat);
+
+// 创建Mastra客户端实例
+export const mastraClient = new MastraClient({
+  baseUrl: process.env.MASTRA_API_URL || 'http://localhost:4111'
+});
 
 /**
  * Mastra终端连接器单例
@@ -174,4 +185,290 @@ class MastraConnector {
 }
 
 // 导出连接器单例
-export default MastraConnector.getInstance(); 
+export default MastraConnector.getInstance();
+
+/**
+ * 获取当前工作目录信息
+ */
+export async function getCurrentDirectoryInfo() {
+  try {
+    const { stdout: pwd } = await execPromise('pwd');
+    const currentDir = pwd.trim();
+    
+    // 获取目录内容
+    const files = await readdirAsync(currentDir);
+    
+    // 获取每个文件的信息
+    const filePromises = files.map(async (file) => {
+      const filePath = path.join(currentDir, file);
+      try {
+        const stat = await statAsync(filePath);
+        return {
+          name: file,
+          isDirectory: stat.isDirectory(),
+          size: stat.size,
+          modified: stat.mtime
+        };
+      } catch (error: any) {
+        return {
+          name: file,
+          error: 'Unable to access file info'
+        };
+      }
+    });
+    
+    const fileDetails = await Promise.all(filePromises);
+    
+    return {
+      currentDirectory: currentDir,
+      files: fileDetails
+    };
+  } catch (error: any) {
+    console.error('获取目录信息时出错:', error);
+    return { 
+      currentDirectory: 'Unknown',
+      files: [],
+      error: error.message
+    };
+  }
+}
+
+/**
+ * 获取项目上下文信息
+ */
+export async function getProjectContext() {
+  try {
+    // 尝试检测项目类型
+    const projectInfo = await detectProjectType();
+    
+    // 获取环境变量
+    const { stdout: envOutput } = await execPromise('env');
+    const envVars = envOutput.split('\n')
+      .filter(line => line.trim() !== '')
+      .map(line => line.trim());
+    
+    return {
+      ...projectInfo,
+      environmentVariables: envVars
+    };
+  } catch (error: any) {
+    console.error('获取项目上下文时出错:', error);
+    return {
+      type: 'unknown',
+      error: error.message
+    };
+  }
+}
+
+/**
+ * 检测项目类型
+ */
+async function detectProjectType() {
+  const { stdout: pwd } = await execPromise('pwd');
+  const currentDir = pwd.trim();
+  
+  try {
+    // 检查是否存在package.json
+    const packagePath = path.join(currentDir, 'package.json');
+    if (fs.existsSync(packagePath)) {
+      const packageData = JSON.parse(await readFileAsync(packagePath, 'utf8'));
+      
+      // 检查依赖判断框架类型
+      const dependencies = {
+        ...packageData.dependencies || {},
+        ...packageData.devDependencies || {}
+      };
+      
+      let type = 'node';
+      let framework = 'unknown';
+      
+      if (dependencies.react) {
+        type = 'react';
+        
+        if (dependencies.next) {
+          framework = 'next.js';
+        } else if (dependencies['react-native']) {
+          framework = 'react-native';
+        } else {
+          framework = 'react';
+        }
+      } else if (dependencies.vue) {
+        type = 'vue';
+        
+        if (dependencies.nuxt) {
+          framework = 'nuxt.js';
+        } else {
+          framework = 'vue';
+        }
+      } else if (dependencies.express) {
+        framework = 'express';
+      } else if (dependencies.koa) {
+        framework = 'koa';
+      }
+      
+      return {
+        type,
+        framework,
+        packageJson: packageData,
+        languages: ['javascript', 'typescript']
+      };
+    }
+    
+    // 检查是否存在go.mod
+    if (fs.existsSync(path.join(currentDir, 'go.mod'))) {
+      return {
+        type: 'go',
+        languages: ['go']
+      };
+    }
+    
+    // 检查是否存在Cargo.toml
+    if (fs.existsSync(path.join(currentDir, 'Cargo.toml'))) {
+      return {
+        type: 'rust',
+        languages: ['rust']
+      };
+    }
+    
+    // 检查其他文件类型
+    const files = await readdirAsync(currentDir);
+    
+    // 根据文件扩展名判断主要语言
+    const extensions = files.reduce((acc: Record<string, number>, file) => {
+      const ext = path.extname(file).toLowerCase();
+      if (ext && ext !== '.') {
+        acc[ext] = (acc[ext] || 0) + 1;
+      }
+      return acc;
+    }, {});
+    
+    // 排序找出最常见的扩展名
+    const sortedExts = Object.entries(extensions)
+      .sort(([, countA], [, countB]) => (countB as number) - (countA as number))
+      .map(([ext]) => ext);
+    
+    // 根据扩展名映射到语言
+    const languageMap: Record<string, string> = {
+      '.py': 'python',
+      '.js': 'javascript',
+      '.ts': 'typescript',
+      '.go': 'go',
+      '.rs': 'rust',
+      '.java': 'java',
+      '.c': 'c',
+      '.cpp': 'c++',
+      '.cs': 'c#',
+      '.rb': 'ruby',
+      '.php': 'php',
+      '.scala': 'scala',
+      '.swift': 'swift',
+      '.kt': 'kotlin'
+    };
+    
+    const languages = sortedExts
+      .map(ext => languageMap[ext])
+      .filter(Boolean);
+    
+    return {
+      type: languages[0] || 'unknown',
+      languages: languages.length > 0 ? languages : ['unknown']
+    };
+  } catch (error: any) {
+    console.error('检测项目类型时出错:', error);
+    return {
+      type: 'unknown',
+      error: error.message
+    };
+  }
+}
+
+/**
+ * 调用终端智能体并提供上下文
+ */
+export async function callTerminalAgentWithContext(input: string, threadId: string) {
+  try {
+    // 获取上下文信息
+    const dirInfo = await getCurrentDirectoryInfo();
+    const projectInfo = await getProjectContext();
+    
+    // 获取终端智能体实例
+    const agent = mastraClient.getAgent('terminalAgent');
+    
+    // 构建包含上下文的提示
+    const contextPrompt = `
+当前上下文:
+当前目录: ${dirInfo.currentDirectory}
+项目类型: ${projectInfo.type || 'unknown'}
+${projectInfo.framework ? `框架: ${projectInfo.framework}` : ''}
+主要语言: ${projectInfo.languages?.join(', ') || 'unknown'}
+
+用户的请求: ${input}
+`;
+    
+    // 调用智能体生成响应
+    const response = await agent.generate({
+      messages: [
+        {
+          role: 'user',
+          content: contextPrompt
+        }
+      ],
+      threadId
+    });
+    
+    return response.text;
+  } catch (error) {
+    console.error('调用智能体时出错:', error);
+    return `智能体调用失败: ${error.message || '未知错误'}`;
+  }
+}
+
+/**
+ * 流式调用终端智能体并提供上下文
+ */
+export async function streamTerminalAgentWithContext(
+  input: string,
+  onChunk: (chunk: string) => void,
+  threadId: string
+) {
+  try {
+    // 获取上下文信息
+    const dirInfo = await getCurrentDirectoryInfo();
+    const projectInfo = await getProjectContext();
+    
+    // 获取终端智能体实例
+    const agent = mastraClient.getAgent('terminalAgent');
+    
+    // 构建包含上下文的提示
+    const contextPrompt = `
+当前上下文:
+当前目录: ${dirInfo.currentDirectory}
+项目类型: ${projectInfo.type || 'unknown'}
+${projectInfo.framework ? `框架: ${projectInfo.framework}` : ''}
+主要语言: ${projectInfo.languages?.join(', ') || 'unknown'}
+
+用户的请求: ${input}
+`;
+    
+    // 流式调用智能体
+    const response = await agent.stream({
+      messages: [
+        {
+          role: 'user',
+          content: contextPrompt
+        }
+      ],
+      threadId
+    });
+    
+    // 处理流式响应
+    await response.processDataStream({
+      onTextPart: (text) => {
+        onChunk(text);
+      }
+    });
+  } catch (error) {
+    console.error('流式调用终端智能体时出错:', error);
+    onChunk(`智能体调用失败: ${error.message || '未知错误'}`);
+  }
+} 
