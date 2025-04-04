@@ -4,6 +4,7 @@
   "repository": "zeit/hyper",
   "scripts": {
     "start": "echo 'please run `yarn run dev` in one tab and then `yarn run app` in another one'",
+    "start:terminal-ai": "./scripts/start-terminal-ai.sh",
     "app": "cross-env ELECTRONMON_LOGLEVEL=error electronmon target",
     "dev": "concurrently -n \"Webpack,TypeScript\" -c \"cyan.bold,blue.bold\" \"webpack -w\" \"tsc --build -v --pretty --watch --preserveWatchOutput\" -k",
     "build": "cross-env NODE_ENV=production webpack && tsc -b -v && cross-env BABEL_ENV=production babel target/renderer/bundle.js --out-file target/renderer/bundle.js --no-comments --minified",
@@ -12,6 +13,8 @@
     "test:unit": "ava",
     "test:unit:watch": "yarn run test:unit -- --watch",
     "test:e2e": "ava --config ava-e2e.config.js",
+    "test:terminal-ai": "ts-node -r tsconfig-paths/register test/terminal-ai-test.ts",
+    "test:terminal-ai:mock": "ts-node -r tsconfig-paths/register test/terminal-ai-test-mock.ts",
     "postinstall": "yarn run v8-snapshot && webpack --config-name hyper-app && electron-builder install-app-deps && yarn run rebuild-node-pty && cpy --cwd=target node_modules \"../../app/\" && husky install && yarn run generate-schema",
     "rebuild-node-pty": "electron-rebuild -f -o node-pty -m target",
     "dist": "yarn run build && electron-builder",
@@ -28,7 +31,11 @@
     "email": "team@zeit.co"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^1.3.6",
     "@electron/remote": "2.1.2",
+    "@mastra/client-js": "^0.1.13",
+    "@mastra/core": "^0.7.0",
+    "@mastra/memory": "^0.2.6",
     "@react-icons/all-files": "4.1.0",
     "@redux-devtools/extension": "^3.3.0",
     "args": "5.0.3",
@@ -58,6 +65,8 @@
     "shebang-loader": "0.0.1",
     "styled-jsx": "5.1.2",
     "stylis": "3.5.4",
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
     "typescript-json-schema": "0.63.0",
     "uuid": "9.0.1",
     "webpack-cli": "5.1.4",
@@ -133,7 +142,6 @@
     "style-loader": "4.0.0",
     "terser": "5.30.3",
     "terser-webpack-plugin": "^5.3.10",
-    "ts-node": "10.9.2",
     "typescript": "5.4.5",
     "webpack": "5.91.0"
   },
