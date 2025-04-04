@@ -74,23 +74,15 @@ if (isDev) {
 const url = `file://${resolve(isDev ? __dirname : app.getAppPath(), 'index.html')}`;
 console.log('electron will open', url);
 
-async function installDevExtensions(isDev_: boolean) {
-  if (!isDev_) {
-    return [];
-  }
-  const {default: installer, REACT_DEVELOPER_TOOLS, REDUX_DEVTOOLS} = await import('electron-devtools-installer');
-
-  const extensions = [REACT_DEVELOPER_TOOLS, REDUX_DEVTOOLS];
-  const forceDownload = Boolean(process.env.UPGRADE_EXTENSIONS);
-
-  return Promise.all(
-    extensions.map((extension) => installer(extension, {forceDownload, loadExtensionOptions: {allowFileAccess: true}}))
-  );
+function installDevExtensions(): Promise<any[]> {
+  // Temporarily disable loading extensions to fix startup issues
+  console.log('DevTools extensions loading disabled temporarily');
+  return Promise.resolve([]);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-misused-promises
 app.on('ready', () =>
-  installDevExtensions(isDev)
+  installDevExtensions()
     .then(() => {
       function createWindow(
         fn?: (win: BrowserWindow) => void,
