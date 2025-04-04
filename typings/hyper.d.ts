@@ -201,7 +201,27 @@ type extensionProps = Partial<{
 }>;
 
 import type {HeaderConnectedProps} from '../lib/containers/header';
-export type HeaderProps = HeaderConnectedProps & extensionProps;
+export type HeaderProps = {
+  isMac: boolean;
+  tabs: ITab[];
+  borderColor: string;
+  backgroundColor: string;
+  maximized: boolean;
+  fullScreen: boolean;
+  showHamburgerMenu: boolean | '';
+  showWindowControls: boolean | '';
+  defaultProfile: string;
+  profiles: Immutable<configOptions['profiles']>;
+  onChangeTab: (uid: string) => void;
+  onCloseTab: (uid: string) => void;
+  openHamburgerMenu: (coordinates: {x: number; y: number}) => void;
+  maximize: () => void;
+  unmaximize: () => void;
+  minimize: () => void;
+  close: () => void;
+  openNewTab: (profile: string) => void;
+  aiToolbar?: React.ReactNode;
+} & extensionProps;
 
 import type {HyperConnectedProps} from '../lib/containers/hyper';
 export type HyperProps = HyperConnectedProps & extensionProps;

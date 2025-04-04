@@ -1,4 +1,4 @@
-import React, {forwardRef, useEffect, useRef} from 'react';
+import React, {forwardRef, useEffect, useRef, useState} from 'react';
 
 import Mousetrap from 'mousetrap';
 import type {MousetrapInstance} from 'mousetrap';
@@ -7,8 +7,10 @@ import stylis from 'stylis';
 import type {HyperState, HyperProps, HyperDispatch} from '../../typings/hyper';
 import * as uiActions from '../actions/ui';
 import {getRegisteredKeys, getCommandHandler, shouldPreventDefault} from '../command-registry';
-import type Terms from '../components/terms';
+import {parseCommandForExecution} from '../utils/command-parser';
 import {connect} from '../utils/plugins';
+import AIToolbar from '../components/ai-toolbar';
+import type Terms from '../components/terms';
 
 import {HeaderContainer} from './header';
 import NotificationsContainer from './notifications';
@@ -19,6 +21,7 @@ const isMac = /Mac/.test(navigator.userAgent);
 const Hyper = forwardRef<HTMLDivElement, HyperProps>((props, ref) => {
   const mousetrap = useRef<MousetrapInstance | null>(null);
   const terms = useRef<Terms | null>(null);
+  const [aiMode, setAiMode] = useState(false);
 
   useEffect(() => {
     void attachKeyListeners();
@@ -39,6 +42,21 @@ const Hyper = forwardRef<HTMLDivElement, HyperProps>((props, ref) => {
     if (term) {
       term.selectAll();
     }
+  };
+
+  const handleCommand = (command: string) => {
+    const term = terms.current?.getActiveTerm();
+    if (term && command) {
+      const parsedCommand = parseCommandForExecution(command) || command;
+      term.write(parsedCommand);
+      setTimeout(() => {
+        term.write('\n');
+      }, 100);
+    }
+  };
+
+  const toggleAIMode = () => {
+    setAiMode(!aiMode);
   };
 
   const attachKeyListeners = async () => {
@@ -94,13 +112,22 @@ const Hyper = forwardRef<HTMLDivElement, HyperProps>((props, ref) => {
   const {isMac: isMac_, customCSS, uiFontFamily, borderColor, maximized, fullScreen} = props;
   const borderWidth = isMac_ ? '' : `${maximized ? '0' : '1'}px`;
   stylis.set({prefix: false});
+  
+  const aiToolbarComponent = (
+    <AIToolbar 
+      onCommand={handleCommand} 
+      aiMode={aiMode} 
+      onToggleAIMode={toggleAIMode} 
+    />
+  );
+  
   return (
     <div id="hyper" ref={ref}>
       <div
         style={{fontFamily: uiFontFamily, borderColor, borderWidth}}
         className={`hyper_main ${isMac_ && 'hyper_mainRounded'} ${fullScreen ? 'fullScreen' : ''}`}
       >
-        <HeaderContainer />
+        <HeaderContainer aiToolbar={aiToolbarComponent} />
         <TermsContainer ref_={onTermsRef} />
         {props.customInnerChildren}
       </div>

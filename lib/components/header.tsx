@@ -91,7 +91,7 @@ const Header = forwardRef<HTMLElement, HeaderProps>((props, ref) => {
 
   return (
     <header
-      className={`header_header ${isMac && 'header_headerRounded'}`}
+      className={`header_header ${isMac ? 'header_headerRounded' : ''}`}
       onMouseDown={handleHeaderMouseDown}
       onMouseUp={() => window.focusActiveTerm()}
       onDoubleClick={handleMaximizeClick}
@@ -147,6 +147,7 @@ const Header = forwardRef<HTMLElement, HeaderProps>((props, ref) => {
         })}
       />
       {props.customChildren}
+      {props.aiToolbar}
 
       <style jsx>{`
         .header_header {
@@ -155,6 +156,8 @@ const Header = forwardRef<HTMLElement, HeaderProps>((props, ref) => {
           left: 1px;
           right: 1px;
           z-index: 100;
+          display: flex;
+          flex-direction: column;
         }
 
         .header_headerRounded {
